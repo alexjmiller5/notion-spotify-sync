@@ -1,0 +1,64 @@
+import json
+import zipfile
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from core.export_ingest import load_followed_artists, load_playlists
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def export_zip(tmp_path):
+    """Build a minimal GDPR export zip from the fixture JSON files."""
+    zip_path = tmp_path / "export.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr(
+            "Spotify Account Data/Playlist1.json", (FIXTURES / "playlists.json").read_text()
+        )
+        zf.writestr(
+            "Spotify Account Data/YourLibrary.json", (FIXTURES / "your_library.json").read_text()
+        )
+        zf.writestr("Spotify Account Data/Follow.json", (FIXTURES / "follow.json").read_text())
+    return zip_path
+
+
+def test_load_playlists_parses_names_and_descriptions(export_zip):
+    playlists = load_playlists(export_zip)
+    assert [p.name for p in playlists] == ["the good stuff", "galaxy"]
+    assert playlists[0].description is None
+    assert playlists[1].description == "space tunes"
+
+
+def test_load_playlists_maps_song_fields(export_zip):
+    playlists = load_playlists(export_zip)
+    song = playlists[0].songs[0]
+    assert song.name == "Take My Hand"
+    assert song.artist == "Matt Berry"
+    assert song.album == "Witchazel"
+    assert song.spotify_uri == "spotify:track:6n4iuOHAOIu5LtbXBKrD0f"
+    assert song.added_date == date(2025, 2, 27)
+
+
+def test_load_playlists_skips_non_track_items(export_zip):
+    playlists = load_playlists(export_zip)
+    # fixture's first playlist has 2 tracks + 1 localTrack; localTrack is skipped
+    assert len(playlists[0].songs) == 2
+    assert len(playlists[1].songs) == 1
+
+
+def test_load_followed_artists_reads_your_library(export_zip):
+    # Follow.json only holds counts; artist names live in YourLibrary.json
+    assert load_followed_artists(export_zip) == ["GoldLink", "The Strokes"]
+
+
+def test_playlist_snapshot_roundtrip(export_zip):
+    """Snapshot dump is valid JSON and reloads to identical models."""
+    from core.models import Playlist
+
+    playlists = load_playlists(export_zip)
+    dumped = json.dumps([p.model_dump(mode="json") for p in playlists])
+    reloaded = [Playlist.model_validate(d) for d in json.loads(dumped)]
+    assert reloaded == playlists
