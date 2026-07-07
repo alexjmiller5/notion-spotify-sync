@@ -4,6 +4,7 @@ import json
 from datetime import date
 
 import httpx
+import pytest
 
 from core.models import Playlist, Song
 from core.notion_sync import NotionClient, fetch_song_index, song_key, sync_snapshot
@@ -55,6 +56,35 @@ def test_429_honors_retry_after_then_succeeds(mocker):
     assert client.request("GET", "/v1/pages/x") == {"ok": True}
     assert len(calls) == 2
     assert any(c.args == (7.0,) for c in sleep.call_args_list)
+
+
+def test_timeout_and_5xx_retry_then_succeed(mocker):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("slow")
+        if len(calls) == 2:
+            return httpx.Response(502, json={})
+        return httpx.Response(200, json={"ok": True})
+
+    client = make_client(handler, mocker)
+    assert client.request("POST", "/v1/pages", json={}) == {"ok": True}
+    assert len(calls) == 3
+
+
+def test_4xx_is_not_retried(mocker):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(400, json={"message": "bad"})
+
+    client = make_client(handler, mocker)
+    with pytest.raises(httpx.HTTPStatusError):
+        client.request("POST", "/v1/pages", json={})
+    assert len(calls) == 1
 
 
 # --- fetch_song_index ---------------------------------------------------------
