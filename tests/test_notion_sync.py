@@ -136,15 +136,18 @@ def test_fetch_song_index_paginates_and_keys_by_uri(mocker):
 class Recorder:
     """Route Notion API calls to canned responses and record writes."""
 
-    def __init__(self, playlist_pages=(), song_pages=()):
+    def __init__(self, playlist_pages=(), song_pages=(), artist_pages=()):
         self.playlist_pages = list(playlist_pages)
         self.song_pages = list(song_pages)
+        self.artist_pages = list(artist_pages)
         self.created = []
         self.patched = []
         self._n = 0
 
     def __call__(self, request):
         path = request.url.path
+        if path == "/v1/data_sources/artist-ds/query":
+            return httpx.Response(200, json={"results": self.artist_pages, "has_more": False})
         if path == "/v1/data_sources/pl-ds/query":
             return httpx.Response(200, json={"results": self.playlist_pages, "has_more": False})
         if path == "/v1/data_sources/song-ds/query":
@@ -239,3 +242,58 @@ def test_merge_preserves_relations_not_in_snapshot(mocker):
     assert stats["songs_updated"] == 1
     rel = [p for p in rec.patched if p[0] == "s1"][0][1]["properties"]["Playlists"]["relation"]
     assert {r["id"] for r in rel} == {"manual", "pl1"}
+
+
+# --- sync_followed_artists ------------------------------------------------------
+
+from core.models import FollowedArtist  # noqa: E402
+from core.notion_sync import sync_followed_artists  # noqa: E402
+
+ARTIST_CFG = {"followed_artists_data_source_id": "artist-ds"}
+
+
+def artist_page(page_id, name, spotify_id):
+    return {
+        "id": page_id,
+        "properties": {
+            "Name": {"title": [{"plain_text": name}]},
+            "Spotify ID": {"rich_text": [{"plain_text": spotify_id}] if spotify_id else []},
+        },
+    }
+
+
+def test_sync_followed_artists_creates_from_scratch(mocker):
+    rec = Recorder()
+    client = make_client(rec, mocker)
+    stats = sync_followed_artists(
+        client, ARTIST_CFG, [FollowedArtist(name="GoldLink", spotify_id="abc")]
+    )
+    assert stats == {"artists_created": 1, "artists_updated": 0}
+    props = rec.created[0]["properties"]
+    assert rec.created[0]["parent"]["data_source_id"] == "artist-ds"
+    assert props["Name"]["title"][0]["text"]["content"] == "GoldLink"
+    assert props["Spotify ID"]["rich_text"][0]["text"]["content"] == "abc"
+    # export has no genres/followers — must not write empty values over live data
+    assert "Genres" not in props
+    assert "Followers" not in props
+
+
+def test_sync_followed_artists_rerun_matches_on_spotify_id(mocker):
+    rec = Recorder(artist_pages=[artist_page("a1", "GoldLink", "abc")])
+    client = make_client(rec, mocker)
+    stats = sync_followed_artists(
+        client, ARTIST_CFG, [FollowedArtist(name="GoldLink", spotify_id="abc")]
+    )
+    assert stats == {"artists_created": 0, "artists_updated": 1}
+    assert rec.created == []
+    assert rec.patched[0][0] == "a1"
+
+
+def test_sync_followed_artists_live_enrichment_writes_genres_followers(mocker):
+    rec = Recorder(artist_pages=[artist_page("a1", "GoldLink", "abc")])
+    client = make_client(rec, mocker)
+    enriched = FollowedArtist(name="GoldLink", spotify_id="abc", genres=["rap"], followers=42)
+    sync_followed_artists(client, ARTIST_CFG, [enriched])
+    props = rec.patched[0][1]["properties"]
+    assert props["Genres"]["multi_select"] == [{"name": "rap"}]
+    assert props["Followers"]["number"] == 42

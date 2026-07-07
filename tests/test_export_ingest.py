@@ -50,8 +50,15 @@ def test_load_playlists_skips_non_track_items(export_zip):
 
 
 def test_load_followed_artists_reads_your_library(export_zip):
-    # Follow.json only holds counts; artist names live in YourLibrary.json
-    assert load_followed_artists(export_zip) == ["GoldLink", "The Strokes"]
+    # Follow.json only holds counts; artist names+uris live in YourLibrary.json
+    artists = load_followed_artists(export_zip)
+    assert [(a.name, a.spotify_id) for a in artists] == [
+        ("GoldLink", "5XenQ7XfcvQdfIbpLEFaKQ"),
+        ("The Strokes", "0epOFNiUfyON9EYx7Tpr6V"),
+    ]
+    # export has no genres/followers — those stay empty until the live API works
+    assert artists[0].genres == []
+    assert artists[0].followers is None
 
 
 def test_playlist_snapshot_roundtrip(export_zip):
