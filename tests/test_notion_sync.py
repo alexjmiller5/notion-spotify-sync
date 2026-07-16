@@ -232,7 +232,7 @@ def test_existing_song_gains_new_playlist_relation(mocker):
 
 
 def test_merge_preserves_relations_not_in_snapshot(mocker):
-    # a relation Alex added by hand must survive a resync
+    # a relation added by hand in Notion must survive a resync
     rec = Recorder(
         playlist_pages=[playlist_page("pl1", "a")],
         song_pages=[page("s1", "spotify:track:abc", relation_ids=["manual"])],

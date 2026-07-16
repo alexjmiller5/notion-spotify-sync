@@ -8,6 +8,7 @@ from core.spotify_client import SpotifyClient
 
 SETTINGS = Settings(
     notion_token="nt",
+    notion_parent_page_id="pp",
     spotify_client_id="cid",
     spotify_client_secret="csec",
     spotify_refresh_token="rtok",

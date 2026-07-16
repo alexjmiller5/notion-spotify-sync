@@ -1,11 +1,12 @@
 import json
+import os
 import zipfile
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from core.export_ingest import load_followed_artists, load_playlists
+from core.export_ingest import find_export_zip, load_followed_artists, load_playlists
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -59,6 +60,29 @@ def test_load_followed_artists_reads_your_library(export_zip):
     # export has no genres/followers — those stay empty until the live API works
     assert artists[0].genres == []
     assert artists[0].followers is None
+
+
+def make_zip(path, member):
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(member, "{}")
+    return path
+
+
+def test_find_export_zip_picks_newest_account_data(tmp_path):
+    old = make_zip(tmp_path / "old.zip", "Spotify Account Data/Follow.json")
+    new = make_zip(tmp_path / "new.zip", "Spotify Account Data/Follow.json")
+    # newest overall is a streaming-history zip — must be skipped
+    decoy = make_zip(tmp_path / "decoy.zip", "Spotify Extended Streaming History/x.json")
+    os.utime(old, (0, 0))
+    os.utime(new, (1000, 1000))
+    os.utime(decoy, (2000, 2000))
+    assert find_export_zip(tmp_path) == new
+
+
+def test_find_export_zip_errors_when_no_account_data(tmp_path):
+    make_zip(tmp_path / "history.zip", "Spotify Extended Streaming History/x.json")
+    with pytest.raises(FileNotFoundError, match="Spotify Account Data"):
+        find_export_zip(tmp_path)
 
 
 def test_playlist_snapshot_roundtrip(export_zip):
